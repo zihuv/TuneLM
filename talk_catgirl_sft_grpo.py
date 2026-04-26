@@ -4,11 +4,11 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 
 
-base = "/mnt/workspace/models/Qwen3.5-4B"
-sft = "/mnt/workspace/LLaMA-Factory/saves/qwen35-4b/lora/catgirl_sft"
+base = "/root/LLaMA-Factory/models/Qwen3.5-4B"
+sft = "/root/LLaMA-Factory/saves/qwen35-4b/lora/catgirl_sft"
 grpo_candidates = [
-    "/mnt/workspace/grpo_train/catgirl_grpo_lora_output/final/grpo",
-    "/mnt/workspace/grpo_train/catgirl_grpo_lora_output/final",
+    "/root/LLaMA-Factory/catgirl_grpo_lora_output/final/grpo",
+    "/root/LLaMA-Factory/catgirl_grpo_lora_output/final",
 ]
 grpo = next((path for path in grpo_candidates if os.path.exists(path)), grpo_candidates[0])
 

@@ -12,9 +12,9 @@ from catgirl_reward import catgirl_reward_func
 
 
 
-base_model_path = "/mnt/workspace/models/Qwen3.5-4B"
-sft_lora_path = "/mnt/workspace/LLaMA-Factory/saves/qwen35-4b/lora/catgirl_sft"
-grpo_json_path = "/mnt/workspace/LLaMA-Factory/data/catgirl_grpo.json"
+base_model_path = "/root/LLaMA-Factory/models/Qwen3.5-4B"
+sft_lora_path = "/root/LLaMA-Factory/saves/qwen35-4b/lora/catgirl_sft"
+grpo_json_path = "/root/LLaMA-Factory/data/catgirl_grpo.json"
 
 # =========================
 # 1. SwanLab 配置

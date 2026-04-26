@@ -1,6 +1,6 @@
-# 模型与路径
+# 模型与路径（目录记得改）
 model_name_or_path: /mnt/workspace/models/Qwen3.5-4B
-template: qwen         
+template: qwen
 stage: sft
 do_train: true
 finetuning_type: lora
@@ -32,8 +32,6 @@ logging_steps: 10
 save_steps: 100
 save_total_limit: 2
 plot_loss: true
-# output_dir: saves/qwen3.5-4b/lora/catgirl
-# overwrite_output_dir: true
 
 # SwanLab
 use_swanlab: true
