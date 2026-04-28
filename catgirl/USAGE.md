@@ -4,8 +4,8 @@
 
 1. 准备 JSONL 数据
 2. 用 TRL 做 SFT LoRA
-3. 合并 SFT LoRA，得到 vLLM 可加载的 SFT 模型
-4. 用 TRL GRPOTrainer + vLLM colocate 训练 GRPO LoRA
+3. 合并 SFT LoRA，得到可独立加载的 SFT 模型
+4. 用 TRL GRPOTrainer 训练 GRPO LoRA
 5. 试聊验证 SFT 或 SFT+GRPO 效果
 
 ## 目录结构
@@ -16,12 +16,12 @@ catgirl/
   prepare_catgirl_data.py
   train_sft_trl.py
   merge_sft_lora.py
-  train_grpo_trl_vllm.py
+  train_grpo_trl.py
   catgirl_reward.py
   chat_catgirl.py
   configs/
     sft_qwen35_4b.json
-    grpo_qwen35_4b_vllm.json
+    grpo_qwen35_4b.json
   data/
     catgirl_sft.jsonl
     catgirl_grpo.jsonl
@@ -53,25 +53,19 @@ Qwen3.5：
 ```bash
 pip install "transformers>=5.2.0" "datasets>=4.0.0" "accelerate>=1.10.0" peft swanlab modelscope
 pip install -U trl
-uv pip install -U vllm --torch-backend=auto --extra-index-url https://wheels.vllm.ai/nightly
 ```
 
-如果没有安装 `uv`：
-
-```bash
-pip install uv
-```
+当前脚本默认是 fp16 LoRA，不启用 QLoRA 4bit。
 
 安装后检查：
 
 ```bash
-python -c "import torch, trl, vllm; print(torch.__version__, trl.__version__, vllm.__version__)"
+python -c "import torch, trl; print(torch.__version__, trl.__version__)"
 python -c "from trl import SFTTrainer, GRPOTrainer; print('TRL ok')"
 ```
 
-
 ## 准备模型路径
-
+modelscope download --model Qwen/Qwen3.5-4B --local_dir ./model
 把基础模型放到一个固定目录，例如：
 
 ```text
@@ -85,7 +79,6 @@ configs/sft_qwen35_4b.json
 ```
 
 把 `model_name_or_path` 改成你的实际模型路径。
-
 
 ## 准备数据
 
@@ -165,7 +158,7 @@ saves/qwen35-4b/sft_lora
 
 ## 合并 SFT LoRA
 
-vLLM 建议加载合并后的 SFT 模型：
+合并后的 SFT 模型更方便直接试聊，也可以作为 GRPO 的初始模型：
 
 ```bash
 python merge_sft_lora.py \
@@ -182,26 +175,26 @@ saves/qwen35-4b/sft_merged
 
 ## 训练 GRPO
 
-单卡默认使用 vLLM colocate，也就是训练和 vLLM 生成共用同一张显卡。不需要单独启动 `trl vllm-serve`。
+单卡默认使用 TRL 内置生成，避免额外占用显存。
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 accelerate launch train_grpo_trl_vllm.py \
-  --config configs/grpo_qwen35_4b_vllm.json
+CUDA_VISIBLE_DEVICES=0 accelerate launch train_grpo_trl.py \
+  --config configs/grpo_qwen35_4b.json
 ```
 
 先小样本试跑：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 accelerate launch train_grpo_trl_vllm.py \
-  --config configs/grpo_qwen35_4b_vllm.json \
+CUDA_VISIBLE_DEVICES=0 accelerate launch train_grpo_trl.py \
+  --config configs/grpo_qwen35_4b.json \
   --debug-sample-size 20
 ```
 
 再跑 100 条观察：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 accelerate launch train_grpo_trl_vllm.py \
-  --config configs/grpo_qwen35_4b_vllm.json \
+CUDA_VISIBLE_DEVICES=0 accelerate launch train_grpo_trl.py \
+  --config configs/grpo_qwen35_4b.json \
   --debug-sample-size 100
 ```
 
@@ -213,22 +206,7 @@ GRPO 输出：
 saves/qwen35-4b/grpo_lora
 ```
 
-如果单卡 colocate 显存不足，先把配置里的显存占用调低：
-
-```json
-"vllm_gpu_memory_utilization": 0.22
-```
-
-如果仍然 OOM，再临时关掉 vLLM 兜底：
-
-```bash
-CUDA_VISIBLE_DEVICES=0 accelerate launch train_grpo_trl_vllm.py \
-  --config configs/grpo_qwen35_4b_vllm.json \
-  --no-vllm \
-  --debug-sample-size 20
-```
-
-关掉 vLLM 会慢很多，但可以确认训练逻辑和 reward 没问题。
+如果仍然 OOM，优先降低 `num_generations`、`max_prompt_length`、`max_completion_length`，并保持 `gradient_checkpointing` 开启。
 
 ## 试聊
 
@@ -288,26 +266,27 @@ SFT 想更快：
 ```text
 per_device_train_batch_size 调大
 gradient_accumulation_steps 调小
-packing 保持 true
+没有 flash attention/fla 快路径时 packing 保持 false
+装好 flash attention 后再考虑 packing true
 ```
 
 GRPO 想更快：
 
 ```text
-优先确认 vLLM colocate 正常工作
 logging_steps 从 5 调到 10
-max_completion_length 从 320 调到 256
-num_generations 从 4 调到 3
+max_prompt_length 从 768 调到 1024
+max_completion_length 从 256 调到 320
+num_generations 从 2 调到 4
 ```
 
-单卡 vLLM colocate 想更稳：
+单卡 GRPO 想更稳：
 
 ```text
-vllm_gpu_memory_utilization 先用 0.28
-OOM 就降到 0.22
-稳定后可试 0.32 或 0.35
-per_device_train_batch_size 默认 1
-显存很宽裕再试 2
+max_prompt_length 降到 512
+max_completion_length 降到 192
+num_generations 默认 2
+per_device_train_batch_size 默认 2，用来匹配 num_generations=2
+如果还 OOM，可以把 num_generations/per_device_train_batch_size 同时降到 1 做 smoke test，但不建议用于正式 GRPO
 ```
 
 GRPO 猫娘味不够：
@@ -337,7 +316,7 @@ CUDA_VISIBLE_DEVICES=0 python train_sft_trl.py --config configs/sft_qwen35_4b.js
 
 python merge_sft_lora.py --base-model /root/models/Qwen3.5-4B --sft-lora saves/qwen35-4b/sft_lora --output-dir saves/qwen35-4b/sft_merged
 
-CUDA_VISIBLE_DEVICES=0 accelerate launch train_grpo_trl_vllm.py --config configs/grpo_qwen35_4b_vllm.json --debug-sample-size 20
+CUDA_VISIBLE_DEVICES=0 accelerate launch train_grpo_trl.py --config configs/grpo_qwen35_4b.json --debug-sample-size 20
 
 python chat_catgirl.py --base-model saves/qwen35-4b/sft_merged --grpo-lora saves/qwen35-4b/grpo_lora
 ```

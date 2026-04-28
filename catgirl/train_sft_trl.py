@@ -6,8 +6,11 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
+import os
 from pathlib import Path
 from typing import Any
+
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 from datasets import load_dataset
@@ -80,6 +83,7 @@ def main() -> int:
     train_file = get_value(args, config, "train_file", "data/catgirl_sft.jsonl")
     eval_file = get_value(args, config, "eval_file", "data/catgirl_eval.jsonl")
     output_dir = get_value(args, config, "output_dir", "saves/qwen35-4b/sft_lora")
+    gradient_checkpointing = bool(get_value(args, config, "gradient_checkpointing", False))
     if not model_name_or_path:
         raise ValueError("--model-name-or-path is required")
 
@@ -95,6 +99,8 @@ def main() -> int:
     if config.get("attn_implementation"):
         model_kwargs["attn_implementation"] = config["attn_implementation"]
     model = AutoModelForCausalLM.from_pretrained(model_name_or_path, **model_kwargs)
+    if gradient_checkpointing and hasattr(model, "config"):
+        model.config.use_cache = False
 
     data_files = {"train": train_file}
     if eval_file and Path(eval_file).exists():
@@ -121,16 +127,20 @@ def main() -> int:
         "warmup_ratio": float(config.get("warmup_ratio", 0.03)),
         "bf16": bool(config.get("bf16", False)),
         "fp16": bool(config.get("fp16", True)),
+        "optim": config.get("optim", "adamw_torch"),
         "logging_steps": int(get_value(args, config, "logging_steps", 10)),
         "save_steps": int(get_value(args, config, "save_steps", 200)),
         "save_total_limit": int(get_value(args, config, "save_total_limit", 2)),
         "packing": bool(get_value(args, config, "packing", True)),
-        "gradient_checkpointing": bool(get_value(args, config, "gradient_checkpointing", False)),
+        "padding_free": bool(config.get("padding_free", False)),
+        "gradient_checkpointing": gradient_checkpointing,
         "report_to": get_value(args, config, "report_to", "swanlab"),
         "run_name": get_value(args, config, "run_name", "qwen35-4b-catgirl-sft-trl"),
         "eval_strategy": "steps" if "eval" in dataset else "no",
         "eval_steps": int(config.get("eval_steps", 200)),
     }
+    if config.get("gradient_checkpointing_kwargs") is not None:
+        training_args["gradient_checkpointing_kwargs"] = config["gradient_checkpointing_kwargs"]
     sft_config = SFTConfig(**pick_supported(SFTConfig, training_args))
 
     trainer = SFTTrainer(

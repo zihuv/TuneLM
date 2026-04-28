@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train catgirl GRPO LoRA with TRL and optional vLLM generation."""
+"""Train catgirl GRPO LoRA with TRL."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 from datasets import load_dataset
 from peft import LoraConfig, TaskType
@@ -59,17 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save-total-limit", dest="save_total_limit", type=int, default=None)
     parser.add_argument("--report-to", dest="report_to", default=None)
     parser.add_argument("--run-name", dest="run_name", default=None)
-    parser.add_argument("--use-vllm", dest="use_vllm", action="store_true", default=None)
-    parser.add_argument("--no-vllm", dest="use_vllm", action="store_false")
-    parser.add_argument("--vllm-mode", dest="vllm_mode", choices=["server", "colocate"], default=None)
-    parser.add_argument("--vllm-server-base-url", dest="vllm_server_base_url", default=None)
-    parser.add_argument("--vllm-server-host", dest="vllm_server_host", default=None)
-    parser.add_argument("--vllm-server-port", dest="vllm_server_port", type=int, default=None)
-    parser.add_argument("--vllm-group-port", dest="vllm_group_port", type=int, default=None)
-    parser.add_argument("--vllm-gpu-memory-utilization", dest="vllm_gpu_memory_utilization", type=float, default=None)
-    parser.add_argument("--vllm-tensor-parallel-size", dest="vllm_tensor_parallel_size", type=int, default=None)
-    parser.add_argument("--vllm-enable-sleep-mode", dest="vllm_enable_sleep_mode", action="store_true", default=None)
-    parser.add_argument("--no-vllm-enable-sleep-mode", dest="vllm_enable_sleep_mode", action="store_false")
+    parser.add_argument("--gradient-checkpointing", dest="gradient_checkpointing", action="store_true", default=None)
+    parser.add_argument("--no-gradient-checkpointing", dest="gradient_checkpointing", action="store_false")
     return parser
 
 
@@ -80,6 +73,7 @@ def main() -> int:
     model_name_or_path = get_value(args, config, "model_name_or_path")
     train_file = get_value(args, config, "train_file", "data/catgirl_grpo.jsonl")
     output_dir = get_value(args, config, "output_dir", "saves/qwen35-4b/grpo_lora")
+    gradient_checkpointing = bool(get_value(args, config, "gradient_checkpointing", False))
     if not model_name_or_path:
         raise ValueError("--model-name-or-path is required. Use the merged SFT model path.")
 
@@ -102,15 +96,6 @@ def main() -> int:
         task_type=TaskType.CAUSAL_LM,
     )
 
-    vllm_mode = get_value(args, config, "vllm_mode", "colocate")
-    use_vllm = bool(get_value(args, config, "use_vllm", True))
-    vllm_server_host = get_value(args, config, "vllm_server_host", "0.0.0.0")
-    vllm_server_port = int(get_value(args, config, "vllm_server_port", 8000))
-    vllm_group_port = int(get_value(args, config, "vllm_group_port", 51216))
-    if use_vllm and vllm_mode == "server":
-        os.environ.setdefault("MASTER_ADDR", str(vllm_server_host))
-        os.environ.setdefault("MASTER_PORT", str(vllm_group_port))
-
     grpo_args = {
         "output_dir": output_dir,
         "num_train_epochs": float(get_value(args, config, "num_train_epochs", 1.0)),
@@ -129,33 +114,23 @@ def main() -> int:
         "top_p": float(get_value(args, config, "top_p", 0.9)),
         "bf16": bool(config.get("bf16", False)),
         "fp16": bool(config.get("fp16", True)),
+        "optim": config.get("optim", "adamw_torch"),
+        "gradient_checkpointing": gradient_checkpointing,
         "beta": float(config.get("beta", 0.0)),
         "loss_type": config.get("loss_type", "dr_grpo"),
         "mask_truncated_completions": bool(config.get("mask_truncated_completions", True)),
         "report_to": get_value(args, config, "report_to", "swanlab"),
-        "run_name": get_value(args, config, "run_name", "qwen35-4b-catgirl-grpo-vllm"),
-        "use_vllm": use_vllm,
-        "vllm_mode": vllm_mode,
+        "run_name": get_value(args, config, "run_name", "qwen35-4b-catgirl-grpo"),
         "chat_template_kwargs": config.get("chat_template_kwargs", {"enable_thinking": False}),
         "reward_weights": config.get("reward_weights", [1.0, 1.0, 1.0, 1.0]),
     }
-    if use_vllm and vllm_mode == "server":
-        grpo_args.update(
-            {
-                "vllm_server_host": vllm_server_host,
-                "vllm_server_port": vllm_server_port,
-                "vllm_group_port": vllm_group_port,
-                "vllm_server_base_url": get_value(args, config, "vllm_server_base_url", None),
-            }
-        )
-    elif use_vllm and vllm_mode == "colocate":
-        grpo_args.update(
-            {
-                "vllm_gpu_memory_utilization": float(get_value(args, config, "vllm_gpu_memory_utilization", 0.28)),
-                "vllm_tensor_parallel_size": int(get_value(args, config, "vllm_tensor_parallel_size", 1)),
-                "vllm_enable_sleep_mode": bool(get_value(args, config, "vllm_enable_sleep_mode", True)),
-            }
-        )
+    if config.get("gradient_checkpointing_kwargs") is not None:
+        grpo_args["gradient_checkpointing_kwargs"] = config["gradient_checkpointing_kwargs"]
+    if config.get("model_dtype"):
+        grpo_args["model_init_kwargs"] = {
+            "torch_dtype": config["model_dtype"],
+            "trust_remote_code": True,
+        }
     training_args = GRPOConfig(**pick_supported(GRPOConfig, grpo_args))
 
     trainer = GRPOTrainer(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge the SFT LoRA adapter into a standalone model for vLLM rollout."""
+"""Merge the SFT LoRA adapter into a standalone model."""
 
 from __future__ import annotations
 
